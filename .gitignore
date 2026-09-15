@@ -1,8 +1,17 @@
 __pycache__
 .mypy_cache
+src/.mypy_cache
+src/__pycache__
 *.swp
+src/*.swp
 dist
+src/dist
+src/build
 build
+src/*.egg-info
 *.egg-info
+src/env
 .venv
+src/.DS_Store
 .DS_Store
+data/output

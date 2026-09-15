@@ -10,7 +10,7 @@ ParameterType = Literal["number", "string", "boolean"]
 
 class ParameterInfo(BaseModel):
     """defining structure of an individual function param"""
-    type: ParameterInfo
+    type: ParameterType
 
 
 class ReturnInfo(BaseModel):

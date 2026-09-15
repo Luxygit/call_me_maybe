@@ -1,25 +1,17 @@
 
-SRC			= src/main.py
-VENV		= .venv
-PYTHON		= $(VENV)/bin/python3
-PIP			= $(VENV)/bin/pip3
-
 all: install run
 
-$(VENV):
-	python3 -m venv $(VENV)
-	$(PIP) install --quiet flake8 mypy
-
-install: $(VENV)
+install:
+	uv sync
 
 run: install
-	$(PYTHON) $(SRC)
+	uv run python -m src
 
 debug: install
-	$(PYTHON) -m pdb $(SRC)
+	uv run python -m pdb src
 
 clean:
-	rm -rf __pycache__ .mypy_cache dist build *.egg-info $(VENV)
+	rm -rf __pycache__ .mypy_cache dist build *.egg-info src/__pycache__ src/mypy_cache
 
 lint:
 	flake8 .

@@ -15,7 +15,7 @@ def load_functions(file_path: str) -> list[FunctionDefinition]:
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             raw_data = json.load(f)
-        return [FunctionDefiniton(**item) for item in raw_data]
+        return [FunctionDefinition(**item) for item in raw_data]
     except json.JSONDecodeError:
         print("Error: Invalid JSON syntax")
         return []
