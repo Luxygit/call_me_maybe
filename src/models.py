@@ -1,8 +1,8 @@
 """"""
 
 
-from typing import Dict, Literal
-from pydantic import BaseModel, Field
+from typing import Literal
+from pydantic import BaseModel
 
 
 ParameterType = Literal["number", "string", "boolean"]
@@ -22,11 +22,10 @@ class FunctionDefinition(BaseModel):
     """schema definition for a callable function"""
     name: str
     description: str
-    parameters: Dict[str, ParameterInfo]
+    parameters: dict[str, ParameterInfo]
     returns: ReturnInfo
 
 
 class PrompInput(BaseModel):
     """single query prompt from the test suite"""
     prompt: str
-

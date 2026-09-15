@@ -3,11 +3,11 @@
 
 import argparse
 import sys
-from typing import Sequence
+from src.utils import load_functions, load_prompts
 
 
-def parse_args(args: Sequence[str]) -> argparse.Namespace:
-    """parse args"""
+def parse_args(args: list[str]) -> argparse.Namespace:
+    """parse arg values from CLI options"""
     parser = argparse.ArgumentParser(
             description="Constrained decoding function caller"
             )
@@ -31,7 +31,9 @@ def parse_args(args: Sequence[str]) -> argparse.Namespace:
 
 def main() -> None:
     parsed = parse_args(sys.argv[1:])
-    print(f"Functions path: {parsed.functions_definition}")
+    functions = load_functions(parsed.functions_definition)
+    prompts = load_prompts(parsed.input)
+    print(f"Loaded {len(functions)}functions and {len(prompts)} prompts")
 
 
 if __name__ == "__main__":
