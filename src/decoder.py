@@ -41,9 +41,9 @@ class MaskingEngine:
         keep scored for allowed words and assign -inf for the rest
         returns updated list of scores
         """
-        # converting raw list into a numpy array struct
+        # converting raw list into a numpy mem array
         scores_array = np.array(raw_scores, dtype=np.float32)
-        # get number ID of allowed words
+        # check vocab dict indices for whitelisted keys
         allowed_ids: list[int] = []
         for word in allowed_words:
             tid1 = self.tracker.get_id(word)
@@ -52,13 +52,14 @@ class MaskingEngine:
             tid2 = self.tracker.get_id(f"Ġ{word}")
             if tid2 is not None:
                 allowed_ids.append(tid2)
-        # not leaving mask empty, keep oriinal scores to continue loop
+        # not leaving mask empty, keep original scores to continue loop
         if not allowed_ids:
             return raw_scores
-        # creating fast mask with true values and block everything
+        # build a fast mask to block out bad options
         mask = np.ones_like(scores_array, dtype=bool)
-        # unblocking only allowed IDs
+        # Open only our whitelisted spaces inside the mask
         mask[allowed_ids] = False
+        # painting all remaining unallowed slots with -inf
         scores_array[mask] = float("-inf")
         return cast(list[float], scores_array.tolist())
 

@@ -1,4 +1,8 @@
-""""""
+"""
+Data layour structures with Pydantic
+defining the fields, data params, return shapes for all
+function calling pipelines.
+"""
 
 
 from typing import Literal

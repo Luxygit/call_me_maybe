@@ -9,8 +9,7 @@ import argparse
 import sys
 from typing import Any
 from llm_sdk import Small_LLM_Model
-from src.writer import save_results
-from src.utils import load_functions, load_prompts
+from src.utils import load_functions, load_prompts, save_results
 
 
 def parse_args(args: list[str]) -> argparse.Namespace:
@@ -51,6 +50,7 @@ def main() -> None:
         for p in prompts:
             chosen_fn = ""
             prompt_lower = p.prompt.lower()
+            # match keywords to find which function to run
             if "greet" in prompt_lower or "shrek" in prompt_lower:
                 chosen_fn = "fn_greet"
             elif "reverse" in prompt_lower:
@@ -65,11 +65,13 @@ def main() -> None:
                 chosen_fn = functions[0].name
             extracted_params: dict[str, Any] = {}
             words = p.prompt.split()
+            # extract standalonoe numbers from the prompt words
             nums = []
             for s in words:
                 clean_s = s.strip("'\".,?()!")
                 if clean_s.isdigit():
                     nums.append(float(clean_s))
+            # fill param fields based on matched name keys
             if chosen_fn == "fn_add_numbers":
                 if len(nums) >= 2:
                     extracted_params["a"] = nums[0]
