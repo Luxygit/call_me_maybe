@@ -26,6 +26,6 @@ class FunctionDefinition(BaseModel):
     returns: ReturnInfo
 
 
-class PrompInput(BaseModel):
+class PromptInput(BaseModel):
     """single query prompt from the test suite"""
     prompt: str

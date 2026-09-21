@@ -19,7 +19,14 @@ Call Me Maybe is an object oriented Python
 
 ### Installation
 
-make install - 
+When preparing the uv package manager to work with this project and its dependencies
+as well as the llm sdk the following commands were used:
+uv init --no-readme --app
+uv add pydantic numpy
+uv add --editable ./llm_sdk
+
+Then to install the same dependencies in another machine and test the program:
+make install
 
 ### Debugging
 Using make debug' we got access to pythons debugger to examine the program:
