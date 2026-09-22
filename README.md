@@ -58,21 +58,37 @@ AI (Claude & Gemini) were used to:
 - Handle all possible Exceptions
 
 ## Algorithm
-The program uses a technique known as constrained decoding, which instead of
-letting the AI make the entire output layout freely, it guides it char by char.
-To prevent chat bot responses, it uses a technique called Pre-typing.
+- When you type the execution command, the program reads your options using a
+built-in Python tool called `argparse`. It checks if you supplied custom file
+locations for your schemas, inputs, or outputs. If you didn't, it falls back
+to your default `data/` folders automatically.
+- Pydantic is used to read the function blueprints and prompt questions.
+Pydantic acts like a guard: it checks if the data types match what we expect.
+If a file is corrupted or missing parts, it catches the mistake cleanly.
+- Constrained Decoding:
+We activate the AI tool using llm_sdk Small_LLM_Model(). We load the AI’s
+special dictionary (`vocab.json`) into our Vocabulary Tracker, which gives us
+a translation table to match the AI’s numbers with visual letters.
+- To prevent chat bot responses, it uses a technique called Pre-typing.
 I stablished a starter context string `[{"prompt": "...", "name": "` directly
 into the AI's active history array. This instantly forces the AI to start
 typing out a valid function name next.
-Our vocabulary engine loads the AI's vocab.json dictionary. It builds an index
-mapping so we can translate numbers back into string text instantly. This lets
-us check which letters are hidden behind the AI's number tokens.
-Every time the AI wants to choose the next word, it calculates scores for
+- We then ask the AI to calculate what word should come next by running
+model.get_logits_from_input_ids(). This gives us the Logits, which are just
+a massive list of raw math scores for all 151,000 words in the AI's dictionary.
+The program builds an index mapping so we can translate numbers back into
+string text instantly. This lets us check which letters are hidden behind
+the AI's number tokens.
+- Every time the AI wants to choose the next word, it calculates scores for
 all words in its vocabulary, then the program uses a fast Numpy Matrix Mask
 to intercept all the words that would break the JSON structure and 
 assigns their value to -inf forcing AI to avoid them.
-Once the text generation finishes, the text is fed into a safe JSON sandbox
-utilizing a `try-except`, it attemps to read the string with json.loads().
+If the AI needs to write a function name, we find the names.
+If it needs to write parameters, we find the parameter keys.
+- Once the text generation finishes, the text is fed into a safe JSON sandbox
+utilizing a `try-except` and it attemps to read the string with Python's
+native json.loads().
+
 
 ## Design Decisions
 - Flat app structure. pyproject.toml is a simple flat app instead of a complex
@@ -83,7 +99,6 @@ a very strict file layout and naming.
 - Running uv add llm_sdk --editable makes it so that the sdk is dynamically 
 run in case any of its files changes. It also avoids linter issues with a 
 cached version of a static local dependency.
-- -inf logit masking for word filtering.
 - numpy float32 int32 for fast lookups
 
 ## Performance Analysis
@@ -97,8 +112,12 @@ float32 with int32 ID numbers making the process of looking up tokens
 much faster.
 
 ## Challenges Faced
-- Figuring out how to intercept the AI logits and understanding how to 
+Figuring out how to intercept the AI logits and understanding how to 
 make it give an structured output in a specific format.
+Also getting how a tokenizer cuts text apart. Small AI models use hidden space
+markers (like `Ġ`) and sub-word fragments instead of clean whole words.
+Building a state machine that correctly maps these tiny fragments
+character-by-character without hardcoding example phrases was a major puzzle.
 
 ## Example usage
 The next command can be run with our own test files and the output should be

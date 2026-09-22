@@ -6,8 +6,34 @@ saves function callings into JSON
 
 import json
 import os
-from pydantic import ValidationError
-from src.models import FunctionDefinition, PromptInput
+from typing import Literal
+from pydantic import ValidationError, BaseModel
+
+
+ParameterType = Literal["number", "string", "boolean"]
+
+
+class ParameterInfo(BaseModel):
+    """defining structure of an individual function param"""
+    type: ParameterType
+
+
+class ReturnInfo(BaseModel):
+    """definin the return type structure of a function"""
+    type: ParameterType
+
+
+class FunctionDefinition(BaseModel):
+    """schema definition for a callable function"""
+    name: str
+    description: str
+    parameters: dict[str, ParameterInfo]
+    returns: ReturnInfo
+
+
+class PromptInput(BaseModel):
+    """single query prompt from the test suite"""
+    prompt: str
 
 
 def load_functions(file_path: str) -> list[FunctionDefinition]:

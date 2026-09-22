@@ -8,7 +8,7 @@ from __future__ import annotations
 import numpy as np
 from enum import Enum
 from src.tokenizer import VocabTracker
-from typing import cast
+from typing import cast, Any
 
 
 class JsonState(Enum):
@@ -32,6 +32,18 @@ class MaskingEngine:
         self.expected_keys: list[str] = []
         self.active_key_index: int = 0
         self.prompt_words: list[str] = []
+
+    def inject_deterministic(self, text: str, new_state: "JsonState") -> None:
+        self.generated_text += text
+        self.current_state = new_state
+
+    def current_param_type(self) -> Any:
+        """look up the schema type of the parameter being filled"""
+        for f in self.raw_schemas:
+            if f.name == self.chosen_function:
+                key = self.expected_keys[self.active_key_index]
+                return f.parameters[key].type
+        return "string"
 
     def clean_logits(
             self,
@@ -69,33 +81,63 @@ class MaskingEngine:
         """
         look current state and return next allowed string tokens
         """
-        # if struct tokens pending, only allow the next one
         if self.current_state == JsonState.INSIDE_NAME_VALUE:
-            # only allow tokens that continue one remaining name
-            return available_functions
+            marker = '"name": "'
+            already = (
+                self.generated_text.split(marker)[-1]
+                if marker in self.generated_text else ""
+            )
+            legal_tokens = []
+            for fn in available_functions:
+                if fn.startswith(already):
+                    rem = fn[len(already):]
+                    for token in self.tracker._token_to_id:
+                        if token and (rem.startswith(token)
+                                      or token == f"Ġ{rem}"):
+                            legal_tokens.append(token)
+            return list(set(legal_tokens))[:300]
+
         if self.current_state == JsonState.EXPECT_PARAM_OBJECT:
-            # struct tokens are forced via queue
-            return ['", "parameters": {']
+            # Match raw characters step-by-step
+            return ['"', ',', 'Ġ', 'parameters', ':',
+                    'Ġ:', '{', '", "parameters": {']
+
         if self.current_state == JsonState.INSIDE_PARAM_KEY:
-            # allow digits, quotes, common punctuation, closing
             if not self.expected_keys and self.chosen_function:
                 for f in self.raw_schemas:
                     if f.name == self.chosen_function:
                         self.expected_keys = list(f.parameters.keys())
             if self.active_key_index < len(self.expected_keys):
                 target_key = self.expected_keys[self.active_key_index]
-                return [f'"{target_key}":', f'"{target_key}"']
-            return ["}}]", "}", "}]"]
+                return [
+                    f'"{target_key}":', f'"{target_key}"', 'Ġ', '"', ':',
+                    '": ', f'Ġ"{target_key}":', f'Ġ"{target_key}"'
+                ]
+            return ["}}]", "}", "}]", "Ġ}]"]
+
         if self.current_state == JsonState.EXPECT_PARAM_VALUE:
-            base_tokens = [
-                    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", ".",
-                    '"', ",", "Ġ", "true", "false", "null", "}", "}]", ":"
-                    ]
+            current_type = self.current_param_type()
+            if current_type == "number":
+                return ["0", "1", "2", "3", "4", "5", "6", "7", "8",
+                        "9", "."]
+            if current_type == "boolean":
+                return ["true", "false"]
+            key = self.expected_keys[self.active_key_index]
+            marker = f'"{key}": "'
+            already = (
+                self.generated_text.split(marker)[-1]
+                if marker in self.generated_text else ""
+            )
+            legal_tokens = []
             for word in self.prompt_words:
                 clean = word.strip("'\".,()!?")
-                if clean:
-                    base_tokens.append(clean)
-            return list(set(base_tokens))
+                if clean.startswith(already):
+                    rem = clean[len(already):]
+                    for token in self.tracker._token_to_id:
+                        if token and (rem.startswith(token)
+                                      or token == f"Ġ{rem}"):
+                            legal_tokens.append(token)
+            return list(set(legal_tokens))[:300]
         return []
 
     def advance_state(
@@ -118,6 +160,9 @@ class MaskingEngine:
                 if fn in self.generated_text:
                     self.chosen_function = fn
                     self.current_state = JsonState.EXPECT_PARAM_OBJECT
+                    for f in self.raw_schemas:
+                        if f.name == fn:
+                            self.expected_keys = list(f.parameters.keys())
                     break
         elif self.current_state == JsonState.EXPECT_PARAM_OBJECT:
             if '"parameters": {' in self.generated_text:
@@ -125,7 +170,8 @@ class MaskingEngine:
                 self.active_key_index = 0
         elif self.current_state == JsonState.INSIDE_PARAM_KEY:
             if (self.generated_text.endswith(":")
-               or self.generated_text.endswith('": ')):
+                or self.generated_text.endswith('": ')
+               or self.generated_text.strip().endswith(":")):
                 self.current_state = JsonState.EXPECT_PARAM_VALUE
             # closure detection
             elif self.generated_text.rstrip().endswith("}]"):

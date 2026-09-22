@@ -7,8 +7,11 @@ and saving the final output data.
 
 import argparse
 import sys
+import json
 from typing import Any
 from llm_sdk import Small_LLM_Model
+from src.tokenizer import VocabTracker
+from src.decoder import MaskingEngine, JsonState
 from src.utils import load_functions, load_prompts, save_results
 
 
@@ -45,73 +48,121 @@ def main() -> None:
         return
     # using the LLM tool
     model = Small_LLM_Model()
+    vocab_path = model.get_path_to_vocab_file()
+    tracker = VocabTracker(vocab_path)
+    valid_function_names = [fn.name for fn in functions]
+    catalog_lines = []
+    for fn in functions:
+        params = ", ".join(
+                f"{k}: {v.type}" for k, v in fn.parameters.items())
+        catalog_lines.append(f"- {fn.name}({params}): {fn.description}")
+    context_prefix = (
+            "Available functions:\n" + "\n".join(catalog_lines) + "\n\n")
     final_records: list[dict[str, Any]] = []
     try:
         for p in prompts:
-            chosen_fn = ""
-            prompt_lower = p.prompt.lower()
-            # match keywords to find which function to run
-            if "greet" in prompt_lower or "shrek" in prompt_lower:
-                chosen_fn = "fn_greet"
-            elif "reverse" in prompt_lower:
-                chosen_fn = "fn_reverse_string"
-            elif "root" in prompt_lower or "square" in prompt_lower:
-                chosen_fn = "fn_get_square_root"
-            elif "replace" in prompt_lower or "substitute" in prompt_lower:
-                chosen_fn = "fn_substitute_string_with_regex"
-            elif "sum" in prompt_lower or "add" in prompt_lower:
-                chosen_fn = "fn_add_numbers"
-            if not chosen_fn and functions:
-                chosen_fn = functions[0].name
-            extracted_params: dict[str, Any] = {}
-            words = p.prompt.split()
-            # extract standalonoe numbers from the prompt words
-            nums = []
-            for s in words:
-                clean_s = s.strip("'\".,?()!")
-                if clean_s.isdigit():
-                    nums.append(float(clean_s))
-            # fill param fields based on matched name keys
-            if chosen_fn == "fn_add_numbers":
-                if len(nums) >= 2:
-                    extracted_params["a"] = nums[0]
-                    extracted_params["b"] = nums[1]
+            engine = MaskingEngine(tracker, functions)
+            engine.prompt_words = p.prompt.split()
+            escaped_prompt = json.dumps(p.prompt)[1:-1]
+            prefix_context = f'[{{"prompt": "{escaped_prompt}", "name": "'
+            engine.generated_text = prefix_context
+            engine.current_state = JsonState.INSIDE_NAME_VALUE
+            tk_count = 0
+            value_tokens = 0
+            MAX_VALUE_TOKENS = 10
+            while engine.current_state != JsonState.DONE and tk_count < 150:
+                if engine.current_state == JsonState.EXPECT_PARAM_OBJECT:
+                    engine.inject_deterministic(
+                            '", "parameters": {', JsonState.INSIDE_PARAM_KEY)
+                    continue
+                if engine.current_state == JsonState.INSIDE_PARAM_KEY:
+                    if engine.active_key_index < len(engine.expected_keys):
+                        key = engine.expected_keys[engine.active_key_index]
+                        opener = (f'"{key}": "'
+                                  if engine.current_param_type() == "string"
+                                  else f'"{key}": ')
+                        engine.inject_deterministic(
+                                opener, JsonState.EXPECT_PARAM_VALUE)
+                    else:
+                        engine.inject_deterministic("}}]", JsonState.DONE)
+                    continue
+
+                allowed = engine.get_allowed_tokens(valid_function_names)
+                current_ids = [int(i) for i in model.encode(
+                        context_prefix + engine.generated_text
+                        ).flatten().tolist()]
+                raw_logits = model.get_logits_from_input_ids(current_ids)
+                is_number = (engine.current_state
+                             == JsonState.EXPECT_PARAM_VALUE
+                             and engine.current_param_type() == "number")
+                if is_number and value_tokens > 0:
+                    raw_top = raw_logits.index(max(raw_logits))
+                    raw_top_text = tracker.get_token(raw_top) or ""
+                    if raw_top_text.lstrip("\u0120") not in (
+                            "0", "1", "2", "3", "4", "5", "6", "7",
+                            "8", "9", "."):
+                        closer = ""
+                        engine.active_key_index += 1
+                        next_state = (
+                                JsonState.INSIDE_PARAM_KEY
+                                if (engine.active_key_index
+                                    < len(engine.expected_keys))
+                                else JsonState.DONE)
+                        sep = (", " if next_state ==
+                               JsonState.INSIDE_PARAM_KEY else "}}]")
+                        engine.inject_deterministic(
+                                closer + sep, next_state)
+                        value_tokens = 0
+                        continue
+                clean_logits = engine.clean_logits(raw_logits, allowed)
+                if all(x == float("-inf") for x in clean_logits):
+                    break
+                best_id = clean_logits.index(max(clean_logits))
+                token_text = (tracker.get_token(best_id) or "").lstrip(
+                        "\u0120")
+                engine.advance_state(token_text, valid_function_names)
+                tk_count += 1
+                if engine.current_state == JsonState.EXPECT_PARAM_VALUE:
+                    value_tokens += 1
+                    if value_tokens >= MAX_VALUE_TOKENS:
+                        closer = ('"' if engine.current_param_type()
+                                  == "string" else "")
+                        engine.active_key_index += 1
+                        next_state = (
+                                JsonState.INSIDE_PARAM_KEY
+                                if (engine.active_key_index
+                                    < len(engine.expected_keys))
+                                else JsonState.DONE)
+                        sep = (", " if next_state ==
+                               JsonState.INSIDE_PARAM_KEY else "}}]")
+                        engine.inject_deterministic(
+                                closer + sep, next_state)
+                        value_tokens = 0
                 else:
-                    extracted_params["a"] = 0.0
-                    extracted_params["b"] = 0.0
-            elif chosen_fn == "fn_get_square_root":
-                extracted_params["a"] = nums[0] if nums else 0.0
-            elif chosen_fn == "fn_greet":
-                extracted_params["name"] = words[-1].strip("'\".,!?")
-            elif chosen_fn == "fn_reverse_string":
-                if "'" in p.prompt:
-                    extracted_params["s"] = p.prompt.split("'")[1]
+                    value_tokens = 0
+            # Fallback syntax completion engine layer
+            clean_output = engine.generated_text.strip()
+            if not clean_output.startswith("["):
+                clean_output = "[" + clean_output
+            if not clean_output.endswith("}]"):
+                if '"parameters":' in clean_output:
+                    clean_output += "}]"
                 else:
-                    extracted_params["s"] = words[-1].strip("'\".,!?")
-            elif chosen_fn == "fn_substitute_string_with_regex":
-                # Dynamically fill missing keys for regex calls
-                if "replace all numbers" in prompt_lower:
-                    extracted_params["source_string"] = (
-                            "Hello 34 I'm 233 years old"
-                    )
-                    extracted_params["regex"] = "[0-9]+"
-                    extracted_params["replacement"] = "NUMBERS"
-                elif "replace all vowels" in prompt_lower:
-                    extracted_params["source_string"] = "Programming is fun"
-                    extracted_params["regex"] = "[aeiouAEIOU]"
-                    extracted_params["replacement"] = "*"
-                elif "substitute the word" in prompt_lower:
-                    extracted_params["source_string"] = (
-                        "The cat sat on the mat with another cat"
-                    )
-                    extracted_params["regex"] = "cat"
-                    extracted_params["replacement"] = "dog"
-            final_records.append({
-                "prompt": p.prompt,
-                "name": chosen_fn,
-                "parameters": extracted_params
-                })
-            print(f"Successfully generated {model._model_name} {chosen_fn}")
+                    clean_output += ', "parameters": {}}]'
+            try:
+                parsed_json = json.loads(clean_output)
+                if isinstance(parsed_json, list) and len(parsed_json) > 0:
+                    inner = parsed_json[0]
+                    final_records.append({
+                        "prompt": p.prompt,
+                        "name": inner.get("name", ""),
+                        "parameters": inner.get("parameters", {})
+                        })
+                    print(f"Successfully generated {inner.get('name')}")
+            except (json.JSONDecodeError, IndexError, KeyError) as err:
+                print("Warning: Invalid syntax")
+                print("  reason:", err)
+                print("  raw buffer:", repr(clean_output))
     except KeyboardInterrupt:
         print("\nExecution interrupted")
     save_results(final_records, parsed.output)
