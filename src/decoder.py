@@ -32,8 +32,11 @@ class MaskingEngine:
         self.expected_keys: list[str] = []
         self.active_key_index: int = 0
         self.prompt_words: list[str] = []
+        self.prompt_text: str = ""
+        self.bonus_ids: list[int] = []
 
     def inject_deterministic(self, text: str, new_state: "JsonState") -> None:
+        """"""
         self.generated_text += text
         self.current_state = new_state
 
@@ -53,18 +56,18 @@ class MaskingEngine:
         keep scored for allowed words and assign -inf for the rest
         returns updated list of scores
         """
-        # converting raw list into a numpy mem array
+        # If generating an unconstrained string, let the model think freely
+        if not allowed_words:
+            return raw_scores
         scores_array = np.array(raw_scores, dtype=np.float32)
-        # check vocab dict indices for whitelisted keys
         allowed_ids: list[int] = []
         for word in allowed_words:
             tid1 = self.tracker.get_id(word)
+            tid2 = self.tracker.get_id(f"Ġ{word}")
             if tid1 is not None:
                 allowed_ids.append(tid1)
-            tid2 = self.tracker.get_id(f"Ġ{word}")
             if tid2 is not None:
                 allowed_ids.append(tid2)
-        # not leaving mask empty, keep original scores to continue loop
         if not allowed_ids:
             return raw_scores
         # build a fast mask to block out bad options
@@ -117,27 +120,29 @@ class MaskingEngine:
 
         if self.current_state == JsonState.EXPECT_PARAM_VALUE:
             current_type = self.current_param_type()
-            if current_type == "number":
-                return ["0", "1", "2", "3", "4", "5", "6", "7", "8",
-                        "9", "."]
-            if current_type == "boolean":
-                return ["true", "false"]
             key = self.expected_keys[self.active_key_index]
-            marker = f'"{key}": "'
-            already = (
-                self.generated_text.split(marker)[-1]
-                if marker in self.generated_text else ""
-            )
-            legal_tokens = []
-            for word in self.prompt_words:
-                clean = word.strip("'\".,()!?")
-                if clean.startswith(already):
-                    rem = clean[len(already):]
-                    for token in self.tracker._token_to_id:
-                        if token and (rem.startswith(token)
-                                      or token == f"Ġ{rem}"):
-                            legal_tokens.append(token)
-            return list(set(legal_tokens))[:300]
+            if current_type == "number":
+                digits = ["0", "1", "2", "3", "4", "5", "6", "7", "8",
+                          "9", ".", "Ġ0", "Ġ1", "Ġ2", "Ġ3", "Ġ4",
+                          "Ġ5", "Ġ6", "Ġ7", "Ġ8", "Ġ9", "Ġ."]
+                for word in self.prompt_words:
+                    clean = word.strip(".,!?")
+                    try:
+                        float(clean)
+                        digits.extend([clean, f"Ġ{clean}"])
+                    except ValueError:
+                        pass
+                marker = f'"{key}": '
+                already = (
+                    self.generated_text.split(marker)[-1]
+                    if marker in self.generated_text else "")
+                if already == "":
+                    digits.extend(["-", "Ġ-"])
+                return digits
+            if current_type == "string":
+                return []
+            if current_type == "boolean":
+                return ["true", "false", "Ġtrue", "Ġfalse"]
         return []
 
     def advance_state(
@@ -177,8 +182,4 @@ class MaskingEngine:
             elif self.generated_text.rstrip().endswith("}]"):
                 self.current_state = JsonState.DONE
         elif self.current_state == JsonState.EXPECT_PARAM_VALUE:
-            if token_text.strip().endswith(","):
-                self.active_key_index += 1
-                self.current_state = JsonState.INSIDE_PARAM_KEY
-            elif self.generated_text.rstrip().endswith("}]"):
-                self.current_state = JsonState.DONE
+            pass
